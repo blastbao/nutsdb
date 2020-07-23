@@ -25,14 +25,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/xujiajun/nutsdb/ds/list"
-	"github.com/xujiajun/nutsdb/ds/set"
-	"github.com/xujiajun/nutsdb/ds/zset"
+	"github.com/blastbao/nutsdb/ds/list"
+	"github.com/blastbao/nutsdb/ds/set"
+	"github.com/blastbao/nutsdb/ds/zset"
 	"github.com/xujiajun/utils/filesystem"
 	"github.com/xujiajun/utils/strconv2"
 )
 
 var (
+
 	// ErrDBClosed is returned when db is closed.
 	ErrDBClosed = errors.New("db is closed")
 
@@ -44,6 +45,7 @@ var (
 
 	// ErrFn is returned when fn is nil.
 	ErrFn = errors.New("err fn")
+
 )
 
 const (
@@ -119,19 +121,30 @@ const (
 )
 
 type (
+
 	// DB represents a collection of buckets that persist on disk.
 	DB struct {
 		opt                     Options   // the database options
+
+
 		BPTreeIdx               BPTreeIdx // Hint Index
+
 		BPTreeRootIdxes         []*BPTreeRootIdx
+
+
 		BPTreeKeyEntryPosMap    map[string]int64 // key = bucket+key  val = EntryPos
 		bucketMetas             BucketMetasIdx
 		SetIdx                  SetIdx
 		SortedSetIdx            SortedSetIdx
 		ListIdx                 ListIdx
 		ActiveFile              *DataFile
+
+		// 内存索引:存储key=>record
 		ActiveBPTreeIdx         *BPTree
+
+		// 内存索引:存储已提交的事务ID
 		ActiveCommittedTxIdsIdx *BPTree
+
 		committedTxIds          map[uint64]struct{}
 		MaxFileID               int64
 		mu                      sync.RWMutex
@@ -177,17 +190,22 @@ func Open(opt Options) (*DB, error) {
 		ActiveCommittedTxIdsIdx: NewTree(),
 	}
 
+	// 目录不存在则创建
 	if ok := filesystem.PathIsExist(db.opt.Dir); !ok {
 		if err := os.MkdirAll(db.opt.Dir, os.ModePerm); err != nil {
 			return nil, err
 		}
 	}
 
+	// 检查索引模式是否合法
 	if err := db.checkEntryIdxMode(); err != nil {
 		return nil, err
 	}
 
+	//  B+ 树磁盘索引
 	if opt.EntryIdxMode == HintBPTSparseIdxMode {
+
+		// 创建 ../bpt/root 目录
 		bptRootIdxDir := db.opt.Dir + "/" + bptDir + "/root"
 		if ok := filesystem.PathIsExist(bptRootIdxDir); !ok {
 			if err := os.MkdirAll(bptRootIdxDir, os.ModePerm); err != nil {
@@ -195,6 +213,7 @@ func Open(opt Options) (*DB, error) {
 			}
 		}
 
+		// 创建 ../bpt/txid 目录
 		bptTxIDIdxDir := db.opt.Dir + "/" + bptDir + "/txid"
 		if ok := filesystem.PathIsExist(bptTxIDIdxDir); !ok {
 			if err := os.MkdirAll(bptTxIDIdxDir, os.ModePerm); err != nil {
@@ -202,6 +221,7 @@ func Open(opt Options) (*DB, error) {
 			}
 		}
 
+		// 创建 ../meta/bucket 目录
 		bucketMetaDir := db.opt.Dir + "/meta/bucket"
 		if ok := filesystem.PathIsExist(bucketMetaDir); !ok {
 			if err := os.MkdirAll(bucketMetaDir, os.ModePerm); err != nil {
@@ -210,6 +230,7 @@ func Open(opt Options) (*DB, error) {
 		}
 	}
 
+	//
 	if err := db.buildIndexes(); err != nil {
 		return nil, fmt.Errorf("db.buildIndexes error: %s", err)
 	}
@@ -217,8 +238,12 @@ func Open(opt Options) (*DB, error) {
 	return db, nil
 }
 
+// 检查索引模式是否合法
 func (db *DB) checkEntryIdxMode() error {
-	hasDataFlag := false
+
+	// 是否存在 ".dat" 数据文件
+	hasDataFlag   := false
+	// 是否存在 "bpt" 子目录
 	hasBptDirFlag := false
 
 	files, err := ioutil.ReadDir(db.opt.Dir)
@@ -227,25 +252,25 @@ func (db *DB) checkEntryIdxMode() error {
 	}
 
 	for _, f := range files {
-		id := f.Name()
-
-		fileSuffix := path.Ext(path.Base(id))
-		if fileSuffix == DataSuffix {
+		// 扩展名检查，判断是否为 ".dat" 数据文件
+		if path.Ext(path.Base(f.Name())) == DataSuffix {
 			hasDataFlag = true
 			if hasBptDirFlag {
 				break
 			}
 		}
-
-		if id == bptDir {
+		// 文件名检查，判断是否为 "bpt" 子目录
+		if f.Name() == bptDir {
 			hasBptDirFlag = true
 		}
 	}
 
+	// 兼容性检查
 	if db.opt.EntryIdxMode != HintBPTSparseIdxMode && hasDataFlag && hasBptDirFlag {
 		return errors.New("not support HintBPTSparseIdxMode switch to the other EntryIdxMode")
 	}
 
+	// 兼容性检查
 	if db.opt.EntryIdxMode == HintBPTSparseIdxMode && hasBptDirFlag == false && hasDataFlag == true {
 		return errors.New("not support the other EntryIdxMode switch to HintBPTSparseIdxMode")
 	}
@@ -271,6 +296,10 @@ func (db *DB) View(fn func(tx *Tx) error) error {
 	return db.managed(false, fn)
 }
 
+
+
+
+
 // Merge removes dirty data and reduce data redundancy,following these steps:
 //
 // 1. Filter delete or expired entry.
@@ -283,6 +312,13 @@ func (db *DB) View(fn func(tx *Tx) error) error {
 //
 // Caveat: Merge is Called means starting multiple write transactions, and it
 // will effect the other write request. so execute it at the appropriate time.
+//
+//
+//
+//
+//
+//
+//
 func (db *DB) Merge() error {
 	var (
 		off                 int64
@@ -394,45 +430,51 @@ func (db *DB) Close() error {
 
 // setActiveFile sets the ActiveFile (DataFile object).
 func (db *DB) setActiveFile() (err error) {
+	// file_id => file_path
 	filepath := db.getDataPath(db.MaxFileID)
+	// 构造文件解析器
 	db.ActiveFile, err = NewDataFile(filepath, db.opt.SegmentSize, db.opt.RWMode)
 	if err != nil {
 		return
 	}
-
+	// 变量赋值
 	db.ActiveFile.fileID = db.MaxFileID
-
 	return nil
 }
 
 // getMaxFileIDAndFileIds returns max fileId and fileIds.
+//
+//
+//
 func (db *DB) getMaxFileIDAndFileIDs() (maxFileID int64, dataFileIds []int) {
+	// 读取目录下所有文件
 	files, _ := ioutil.ReadDir(db.opt.Dir)
 	if len(files) == 0 {
 		return 0, nil
 	}
-
+	// 如果是 ".dat" 结尾的数据文件，从文件名中解析出 ID 添加到数组中
 	maxFileID = 0
-
 	for _, f := range files {
-		id := f.Name()
-		fileSuffix := path.Ext(path.Base(id))
+		// 文件后缀（扩展名）
+		fileSuffix := path.Ext(path.Base(f.Name()))
+		// 检查是不是 ".dat"
 		if fileSuffix != DataSuffix {
 			continue
 		}
-
-		id = strings.TrimSuffix(id, DataSuffix)
+		// 去除 ".dat" 后缀后，得到 file_id ，添加到 dataFileIds 数组中
+		id := strings.TrimSuffix(f.Name(), DataSuffix)
 		idVal, _ := strconv2.StrToInt(id)
 		dataFileIds = append(dataFileIds, idVal)
 	}
-
+	// 为空，直接返回
 	if len(dataFileIds) == 0 {
 		return 0, nil
 	}
-
+	// 排序
 	sort.Ints(dataFileIds)
+	// 取最大值
 	maxFileID = int64(dataFileIds[len(dataFileIds)-1])
-
+	// 返回
 	return
 }
 
@@ -440,20 +482,27 @@ func (db *DB) getMaxFileIDAndFileIDs() (maxFileID int64, dataFileIds []int) {
 func (db *DB) getActiveFileWriteOff() (off int64, err error) {
 	off = 0
 	for {
+
+		// 从文件 offset 处读取一个 Entry
 		if item, err := db.ActiveFile.ReadAt(int(off)); err == nil {
+
+			// 读完就结束
 			if item == nil {
 				break
 			}
 
+			// 继续读下一个 Entry
 			off += item.Size()
-			//set ActiveFileActualSize
+
+			// set ActiveFileActualSize
+			//
+			// 更新成员变量
 			db.ActiveFile.ActualSize = off
 
 		} else {
 			if err == io.EOF {
 				break
 			}
-
 			return -1, fmt.Errorf("when build activeDataIndex readAt err: %s", err)
 		}
 	}
@@ -462,6 +511,8 @@ func (db *DB) getActiveFileWriteOff() (off int64, err error) {
 }
 
 func (db *DB) parseDataFiles(dataFileIds []int) (unconfirmedRecords []*Record, committedTxIds map[uint64]struct{}, err error) {
+
+
 	var (
 		off int64
 		e   *Entry
@@ -469,25 +520,36 @@ func (db *DB) parseDataFiles(dataFileIds []int) (unconfirmedRecords []*Record, c
 
 	committedTxIds = make(map[uint64]struct{})
 
+
+	// B+ 树磁盘索引，取最后一个数据文件
 	if db.opt.EntryIdxMode == HintBPTSparseIdxMode {
 		dataFileIds = dataFileIds[len(dataFileIds)-1:]
 	}
 
+
 	for _, dataID := range dataFileIds {
+
 		off = 0
-		fID := int64(dataID)
-		f, err := NewDataFile(db.getDataPath(fID), db.opt.SegmentSize, db.opt.StartFileLoadingMode)
+		fileID := int64(dataID)
+
+		// 打开 file_id 文件
+		f, err := NewDataFile(db.getDataPath(fileID), db.opt.SegmentSize, db.opt.StartFileLoadingMode)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		for {
+
+			// 从数据文件 offset 处读取一个 Entry
 			if entry, err := f.ReadAt(int(off)); err == nil {
+
 				if entry == nil {
 					break
 				}
 
 				e = nil
+
+				// 内存索引
 				if db.opt.EntryIdxMode == HintKeyValAndRAMIdxMode {
 					e = &Entry{
 						Key:   entry.Key,
@@ -496,23 +558,38 @@ func (db *DB) parseDataFiles(dataFileIds []int) (unconfirmedRecords []*Record, c
 					}
 				}
 
+				// 已提交
 				if entry.Meta.status == Committed {
+
+					// 记录已提交的事务 ID
 					committedTxIds[entry.Meta.txID] = struct{}{}
-					db.ActiveCommittedTxIdsIdx.Insert([]byte(strconv2.Int64ToStr(int64(entry.Meta.txID))), nil,
-						&Hint{meta: &MetaData{Flag: DataSetFlag}}, CountFlagEnabled)
+
+					// 把 txID 写入到已提交事务的索引上
+					_ = db.ActiveCommittedTxIdsIdx.Insert(
+						[]byte(strconv2.Int64ToStr(int64(entry.Meta.txID))), 	// txID
+						nil,													// nil
+						&Hint{
+							meta: &MetaData{
+								Flag: DataSetFlag,								// Set Data
+							},
+						}, CountFlagEnabled)									//
+
 				}
 
+				// 未确认的记录
 				unconfirmedRecords = append(unconfirmedRecords, &Record{
 					H: &Hint{
 						key:     entry.Key,
-						fileID:  fID,
+						fileID:  fileID,
 						meta:    entry.Meta,
 						dataPos: uint64(off),
 					},
-					E: e,
+					E: e, // 空
 				})
 
+				// B+ 树磁盘索引
 				if db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+					// 记录 bucket + key 对应的 Entry 的数据文件偏移
 					db.BPTreeKeyEntryPosMap[string(entry.Meta.bucket)+string(entry.Key)] = off
 				}
 
@@ -522,7 +599,6 @@ func (db *DB) parseDataFiles(dataFileIds []int) (unconfirmedRecords []*Record, c
 				if err == io.EOF {
 					break
 				}
-
 				if off >= db.opt.SegmentSize {
 					break
 				}
@@ -538,26 +614,32 @@ func (db *DB) parseDataFiles(dataFileIds []int) (unconfirmedRecords []*Record, c
 }
 
 func (db *DB) buildBPTreeRootIdxes(dataFileIds []int) error {
+
+
 	var off int64
 
 	dataFileIdsSize := len(dataFileIds)
-
 	if dataFileIdsSize == 1 {
 		return nil
 	}
 
 	for i := 0; i < len(dataFileIds[0:dataFileIdsSize-1]); i++ {
-		fID := dataFileIds[i]
+		fileID := dataFileIds[i]
 		off = 0
 		for {
-			bs, err := ReadBPTreeRootIdxAt(db.getBPTRootPath(int64(fID)), off)
+
+			// 读取 file_id 对应的 B+ 树索引文件
+			bs, err := ReadBPTreeRootIdxAt(db.getBPTRootPath(int64(fileID)), off)
 			if err == io.EOF || err == nil && bs == nil {
 				break
 			}
+
+			// 失败报错
 			if err != nil {
 				return err
 			}
 
+			// 成功，则追加存储到 db.BPTreeRootIdxes 中
 			if err == nil && bs != nil {
 				db.BPTreeRootIdxes = append(db.BPTreeRootIdxes, bs)
 				off += bs.Size()
@@ -572,6 +654,7 @@ func (db *DB) buildBPTreeRootIdxes(dataFileIds []int) error {
 }
 
 func (db *DB) buildBPTreeIdx(bucket string, r *Record) error {
+
 	if _, ok := db.BPTreeIdx[bucket]; !ok {
 		db.BPTreeIdx[bucket] = NewTree()
 	}
@@ -584,39 +667,43 @@ func (db *DB) buildBPTreeIdx(bucket string, r *Record) error {
 }
 
 func (db *DB) buildActiveBPTreeIdx(r *Record) error {
+	// Key = bucket + key
 	newKey := r.H.meta.bucket
 	newKey = append(newKey, r.H.key...)
-
+	// 插入到 B+ 树索引中
 	if err := db.ActiveBPTreeIdx.Insert(newKey, r.E, r.H, CountFlagEnabled); err != nil {
 		return fmt.Errorf("when build BPTreeIdx insert index err: %s", err)
 	}
-
 	return nil
 }
 
 func (db *DB) buildBucketMetaIdx() error {
+
+	// 检查索引模式是不是 B+ 树
 	if db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+
+		// 获取 meta 目录下所有文件
 		files, err := ioutil.ReadDir(db.getBucketMetaPath())
 		if err != nil {
 			return err
 		}
 
+		// 读取 "bucket_xxx.meta" 文件内容，存储到 db.bucketMetas[bucket_xxx] 上
 		if len(files) != 0 {
+
 			for _, f := range files {
-				name := f.Name()
-				fileSuffix := path.Ext(path.Base(name))
+
+				fileSuffix := path.Ext(path.Base(f.Name()))
 				if fileSuffix != BucketMetaSuffix {
 					continue
 				}
 
-				name = strings.TrimSuffix(name, BucketMetaSuffix)
-
-				bucketMeta, err := ReadBucketMeta(db.getBucketMetaFilePath(name))
+				bucketName := strings.TrimSuffix(f.Name(), BucketMetaSuffix)
+				bucketMeta, err := ReadBucketMeta(db.getBucketMetaFilePath(bucketName))
 				if err != nil {
 					return err
 				}
-
-				db.bucketMetas[name] = bucketMeta
+				db.bucketMetas[bucketName] = bucketMeta
 			}
 		}
 	}
@@ -625,6 +712,8 @@ func (db *DB) buildBucketMetaIdx() error {
 }
 
 func (db *DB) buildOtherIdxes(bucket string, r *Record) error {
+
+
 	if r.H.meta.ds == DataStructureSet {
 		if err := db.buildSetIdx(bucket, r); err != nil {
 			return err
@@ -648,35 +737,53 @@ func (db *DB) buildOtherIdxes(bucket string, r *Record) error {
 
 // buildHintIdx builds the Hint Indexes.
 func (db *DB) buildHintIdx(dataFileIds []int) error {
+
+	// 未确认记录、已提交记录
 	unconfirmedRecords, committedTxIds, err := db.parseDataFiles(dataFileIds)
+
 	db.committedTxIds = committedTxIds
 
 	if err != nil {
 		return err
 	}
 
+
 	if len(unconfirmedRecords) == 0 {
 		return nil
 	}
 
+
+	// 遍历所有未确认的记录
 	for _, r := range unconfirmedRecords {
+
+
+		// 如果记录对应的 txID 已经提交
 		if _, ok := db.committedTxIds[r.H.meta.txID]; ok {
+
+			//
 			bucket := string(r.H.meta.bucket)
 
+			// B+ 树
 			if r.H.meta.ds == DataStructureBPTree {
+
+				// 设置状态为 "Committed"
 				r.H.meta.status = Committed
 
+				// B+ 树磁盘索引
 				if db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+					// 插入到 B+ 树中
 					if err = db.buildActiveBPTreeIdx(r); err != nil {
 						return err
 					}
 				} else {
+					// 插入到 B+ 树中
 					if err = db.buildBPTreeIdx(bucket, r); err != nil {
 						return err
 					}
 				}
 			}
 
+			//
 			if err = db.buildOtherIdxes(bucket, r); err != nil {
 				return err
 			}
@@ -685,6 +792,7 @@ func (db *DB) buildHintIdx(dataFileIds []int) error {
 		}
 	}
 
+	// B+ 树磁盘索引
 	if HintBPTSparseIdxMode == db.opt.EntryIdxMode {
 		if err = db.buildBPTreeRootIdxes(dataFileIds); err != nil {
 			return err
@@ -696,6 +804,8 @@ func (db *DB) buildHintIdx(dataFileIds []int) error {
 
 // buildSetIdx builds set index when opening the DB.
 func (db *DB) buildSetIdx(bucket string, r *Record) error {
+
+
 	if _, ok := db.SetIdx[bucket]; !ok {
 		db.SetIdx[bucket] = set.New()
 	}
@@ -807,19 +917,29 @@ func ErrWhenBuildListIdx(err error) error {
 	return fmt.Errorf("when build listIdx LRem err: %s", err)
 }
 
+
+
+
 // buildIndexes builds indexes when db initialize resource.
+//
+//
+//
 func (db *DB) buildIndexes() (err error) {
+
 	var (
 		maxFileID   int64
 		dataFileIds []int
 	)
 
+	// 读取数据库目录中 ".dat" 结尾的数据文件，从文件名中解析出一组 file_ids，排序后返回
 	maxFileID, dataFileIds = db.getMaxFileIDAndFileIDs()
 
-	//init db.ActiveFile
+	// init db.ActiveFile
 	db.MaxFileID = maxFileID
 
-	//set ActiveFile
+	// set ActiveFile
+	//
+	// 具有最大 file_id 的数据文件，是当前最新的文件，打开它
 	if err = db.setActiveFile(); err != nil {
 		return
 	}
@@ -828,10 +948,12 @@ func (db *DB) buildIndexes() (err error) {
 		return
 	}
 
+	// 获取最新写入偏移
 	if db.ActiveFile.writeOff, err = db.getActiveFileWriteOff(); err != nil {
 		return
 	}
 
+	// 初始化 buckets 相关
 	if err = db.buildBucketMetaIdx(); err != nil {
 		return
 	}
@@ -840,23 +962,32 @@ func (db *DB) buildIndexes() (err error) {
 	return db.buildHintIdx(dataFileIds)
 }
 
+
 // managed calls a block of code that is fully contained in a transaction.
+//
+//
 func (db *DB) managed(writable bool, fn func(tx *Tx) error) error {
+
 	var tx *Tx
 
+	// 开启事务
 	tx, err := db.Begin(writable)
 	if err != nil {
 		return err
 	}
 
+	// 执行事务
 	if err = fn(tx); err != nil {
+		// 失败回滚
 		if errRollback := tx.Rollback(); errRollback != nil {
 			return errRollback
 		}
 		return err
 	}
 
+	// 提交事务
 	if err = tx.Commit(); err != nil {
+		// 失败回滚
 		if errRollback := tx.Rollback(); errRollback != nil {
 			return errRollback
 		}
@@ -892,7 +1023,7 @@ func (db *DB) getBPTDir() string {
 func (db *DB) getBPTPath(fID int64) string {
 	return db.getBPTDir() + "/" + strconv2.Int64ToStr(fID) + BPTIndexSuffix
 }
-
+//
 func (db *DB) getBPTRootPath(fID int64) string {
 	return db.getBPTDir() + "/root/" + strconv2.Int64ToStr(fID) + BPTRootIndexSuffix
 }
@@ -906,6 +1037,8 @@ func (db *DB) getBPTRootTxIDPath(fID int64) string {
 }
 
 func (db *DB) getPendingMergeEntries(entry *Entry, pendingMergeEntries []*Entry) []*Entry {
+
+
 	if entry.Meta.ds == DataStructureBPTree {
 		if r, err := db.BPTreeIdx[string(entry.Meta.bucket)].Find(entry.Key); err == nil {
 			if r.H.meta.Flag == DataSetFlag {
@@ -951,12 +1084,15 @@ func (db *DB) getPendingMergeEntries(entry *Entry, pendingMergeEntries []*Entry)
 }
 
 func (db *DB) reWriteData(pendingMergeEntries []*Entry) error {
+
+	// 开启事务
 	tx, err := db.Begin(true)
 	if err != nil {
 		db.isMerging = false
 		return err
 	}
 
+	// 打开新文件
 	dataFile, err := NewDataFile(db.getDataPath(db.MaxFileID+1), db.opt.SegmentSize, db.opt.RWMode)
 	if err != nil {
 		db.isMerging = false
@@ -965,24 +1101,36 @@ func (db *DB) reWriteData(pendingMergeEntries []*Entry) error {
 	db.ActiveFile = dataFile
 	db.MaxFileID++
 
+	// 遍历 Entries
 	for _, e := range pendingMergeEntries {
+
+		// 逐个 put
 		err := tx.put(string(e.Meta.bucket), e.Key, e.Value, e.Meta.TTL, e.Meta.Flag, e.Meta.timestamp, e.Meta.ds)
+
+		// 失败则回滚
 		if err != nil {
 			tx.Rollback()
 			db.isMerging = false
 			return err
 		}
 	}
-	tx.Commit()
+
+	// 提交
+	_ = tx.Commit()
 	return nil
 }
 
 func (db *DB) isFilterEntry(entry *Entry) bool {
-	if entry.Meta.Flag == DataDeleteFlag || entry.Meta.Flag == DataRPopFlag ||
-		entry.Meta.Flag == DataLPopFlag || entry.Meta.Flag == DataLRemFlag ||
-		entry.Meta.Flag == DataLTrimFlag || entry.Meta.Flag == DataZRemFlag ||
-		entry.Meta.Flag == DataZRemRangeByRankFlag || entry.Meta.Flag == DataZPopMaxFlag ||
-		entry.Meta.Flag == DataZPopMinFlag || IsExpired(entry.Meta.TTL, entry.Meta.timestamp) {
+	if  entry.Meta.Flag == DataDeleteFlag ||
+		entry.Meta.Flag == DataRPopFlag ||
+		entry.Meta.Flag == DataLPopFlag ||
+		entry.Meta.Flag == DataLRemFlag ||
+		entry.Meta.Flag == DataLTrimFlag ||
+		entry.Meta.Flag == DataZRemFlag ||
+		entry.Meta.Flag == DataZRemRangeByRankFlag ||
+		entry.Meta.Flag == DataZPopMaxFlag ||
+		entry.Meta.Flag == DataZPopMinFlag ||
+		IsExpired(entry.Meta.TTL, entry.Meta.timestamp) {
 		return true
 	}
 

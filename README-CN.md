@@ -1,10 +1,10 @@
 # NutsDB [![GoDoc](https://godoc.org/github.com/xujiajun/nutsdb?status.svg)](https://godoc.org/github.com/xujiajun/nutsdb)  [![Go Report Card](https://goreportcard.com/badge/github.com/xujiajun/nutsdb)](https://goreportcard.com/report/github.com/xujiajun/nutsdb) <a href="https://travis-ci.org/xujiajun/nutsdb"><img src="https://travis-ci.org/xujiajun/nutsdb.svg?branch=master" alt="Build Status"></a> [![Coverage Status](https://coveralls.io/repos/github/xujiajun/nutsdb/badge.svg?branch=master)](https://coveralls.io/github/xujiajun/nutsdb?branch=master) [![License](http://img.shields.io/badge/license-Apache_2-blue.svg?style=flat-square)](https://raw.githubusercontent.com/xujiajun/nutsdb/master/LICENSE) [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go#database)  
 
-[English](https://github.com/xujiajun/nutsdb/blob/master/README.md) | 简体中文
+[English](https://github.com/blastbao/nutsdb/blob/master/README.md) | 简体中文
 
 NutsDB是纯Go语言编写一个简单、高性能、内嵌型、持久化的key-value数据库。
 
-NutsDB支持事务，从v0.2.0之后的版本开始支持ACID的特性，建议使用最新的release版本。v0.2.0之前的版本，保持高性能，没有作sync，但是具备高性能的写（本地测试，百万数据写入达40~50W+/s）。所有的操作都在事务中执行。NutsDB从v0.2.0版本开始支持多种数据结构，如列表(list)、集合(set)、有序集合(sorted set)。从0.4.0版本开始增加自定义配置读写方式、启动时候的文件载入方式、sync是否开启等，详情见[选项配置](https://github.com/xujiajun/nutsdb/blob/master/README-CN.md#%E9%80%89%E9%A1%B9%E9%85%8D%E7%BD%AE)
+NutsDB支持事务，从v0.2.0之后的版本开始支持ACID的特性，建议使用最新的release版本。v0.2.0之前的版本，保持高性能，没有作sync，但是具备高性能的写（本地测试，百万数据写入达40~50W+/s）。所有的操作都在事务中执行。NutsDB从v0.2.0版本开始支持多种数据结构，如列表(list)、集合(set)、有序集合(sorted set)。从0.4.0版本开始增加自定义配置读写方式、启动时候的文件载入方式、sync是否开启等，详情见[选项配置](https://github.com/blastbao/nutsdb/blob/master/README-CN.md#%E9%80%89%E9%A1%B9%E9%85%8D%E7%BD%AE)
 
 ## 为什么有NutsDB
 
@@ -45,7 +45,7 @@ Badger同样是基于LSM tree，不同的是他把key/value分离。据他官网
  
 天下没有银弹，NutsDB也有他的局限，比如随着数据量的增大，索引变大，启动会慢,只想说NutsDB还有很多优化和提高的空间，由于本人精力以及能力有限。所以把这个项目开源出来。更重要的是我认为一个项目需要有人去使用，有人提意见才会成长。
 
-> 希望看到这个文档的童鞋有兴趣的，一起来参与贡献，欢迎Star、提issues、提交PR ！ [参与贡献](https://github.com/xujiajun/nutsdb/blob/master/README-CN.md#%E5%8F%82%E4%B8%8E%E8%B4%A1%E7%8C%AE)
+> 希望看到这个文档的童鞋有兴趣的，一起来参与贡献，欢迎Star、提issues、提交PR ！ [参与贡献](https://github.com/blastbao/nutsdb/blob/master/README-CN.md#%E5%8F%82%E4%B8%8E%E8%B4%A1%E7%8C%AE)
 
 ## 目录
 
@@ -185,7 +185,7 @@ func main() {
 * SegmentSize          int64 
 
  `SegmentSize` 代表数据库的数据单元，每个数据单元（文件）为`SegmentSize`，现在默认是8
-MB，这个可以自己配置。但是一旦被设置，下次启动数据库也要用这个配置，不然会报错。详情见 [限制和警告](https://github.com/xujiajun/nutsdb/blob/master/README-CN.md#%E8%AD%A6%E5%91%8A%E5%92%8C%E9%99%90%E5%88%B6)。
+MB，这个可以自己配置。但是一旦被设置，下次启动数据库也要用这个配置，不然会报错。详情见 [限制和警告](https://github.com/blastbao/nutsdb/blob/master/README-CN.md#%E8%AD%A6%E5%91%8A%E5%92%8C%E9%99%90%E5%88%B6)。
 
 * NodeNum              int64
 
@@ -220,7 +220,7 @@ var DefaultOptions = Options{
 ### 使用事务
 
 NutsDB为了保证隔离性，防止并发读写事务时候数据的不一致性，同一时间只能执行一个读写事务，但是允许同一时间执行多个只读事务。
-从v0.3.0版本开始，NutsDB遵循标准的ACID原则。（参见[限制和警告](https://github.com/xujiajun/nutsdb/blob/master/README-CN.md#%E8%AD%A6%E5%91%8A%E5%92%8C%E9%99%90%E5%88%B6)）
+从v0.3.0版本开始，NutsDB遵循标准的ACID原则。（参见[限制和警告](https://github.com/blastbao/nutsdb/blob/master/README-CN.md#%E8%AD%A6%E5%91%8A%E5%92%8C%E9%99%90%E5%88%B6)）
 
 
 #### 读写事务
@@ -1902,7 +1902,7 @@ entry的的大小=EntryHeader的大小+key的大小+value的大小+bucket的大�
 
 在传统的关系式数据库中，常常用 ACID 性质来检验事务功能的安全性，~~NutsDB目前的版本并没有完全支持ACID。~~ NutsDB从v0.2.0之后的版本开始完全支持ACID。
 
-这这特别感谢 @damnever 给我提的[issue](https://github.com/xujiajun/nutsdb/issues/10)给我指出，特别在这说明下，免得误导大家。
+这这特别感谢 @damnever 给我提的[issue](https://github.com/blastbao/nutsdb/issues/10)给我指出，特别在这说明下，免得误导大家。
 
 从v0.3.0版本起，NutsDB支持（A）原子性、C（一致性）、I（隔离性），并保证（D）持久化。以下参考[wiki百科](https://zh.wikipedia.org/wiki/ACID)的对ACID定义分别讲一下。如讲的有误，欢迎帮我指正。
 
@@ -1969,7 +1969,7 @@ nutsDB不会出现“不可重复读”这种情况，当高并发的时候，�
 * 提pull requests
 * 优化修改README文档
 
-详情参考英文版的 [CONTRIBUTING](https://github.com/xujiajun/nutsdb/blob/master/CONTRIBUTING.md) 。
+详情参考英文版的 [CONTRIBUTING](https://github.com/blastbao/nutsdb/blob/master/CONTRIBUTING.md) 。
 
 ### 致谢
 
@@ -1983,4 +1983,4 @@ nutsDB不会出现“不可重复读”这种情况，当高并发的时候，�
 
 ### License
 
-The NutsDB is open-sourced software licensed under the [Apache 2.0 license](https://github.com/xujiajun/nutsdb/blob/master/LICENSE).
+The NutsDB is open-sourced software licensed under the [Apache 2.0 license](https://github.com/blastbao/nutsdb/blob/master/LICENSE).

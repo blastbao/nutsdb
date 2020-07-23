@@ -11,18 +11,18 @@ We love your input! We want to make contributing to this project as easy and tra
 - Contributing Documentation
 - Contributing a Performance Improvement
 
-By contributing to NutsDB, you agree to abide by the [code of conduct](https://github.com/xujiajun/nutsdb/blob/master/CODE_OF_CONDUCT.md).
+By contributing to NutsDB, you agree to abide by the [code of conduct](https://github.com/blastbao/nutsdb/blob/master/CODE_OF_CONDUCT.md).
  
 ## Geting Started
-If you are looking to contribute to the NutsDB, the best place to start is the [GitHub "issues"](https://github.com/xujiajun/nutsdb/issues) tab. This is also a great place for filing bug reports and making suggestions for ways in which we can improve the code and documentation.
+If you are looking to contribute to the NutsDB, the best place to start is the [GitHub "issues"](https://github.com/blastbao/nutsdb/issues) tab. This is also a great place for filing bug reports and making suggestions for ways in which we can improve the code and documentation.
 
 ## Reporting bugs
 
-See [reporting bugs](https://github.com/xujiajun/nutsdb/blob/master/.github/ISSUE_TEMPLATE/bug_report.md) for details about reporting any issues.
+See [reporting bugs](https://github.com/blastbao/nutsdb/blob/master/.github/ISSUE_TEMPLATE/bug_report.md) for details about reporting any issues.
 
 ## Feature request
 
-see [feature request](https://github.com/xujiajun/nutsdb/blob/master/.github/ISSUE_TEMPLATE/feature_request.md) for details about reporting any feature requests.
+see [feature request](https://github.com/blastbao/nutsdb/blob/master/.github/ISSUE_TEMPLATE/feature_request.md) for details about reporting any feature requests.
 
 ## Contribution flow
 
@@ -42,4 +42,4 @@ The coding style suggested by the Golang community is used in NutsDB. See the st
 Please follow this style to make NutsDB easy to review, maintain and develop.
 
 ## License
-By contributing, you agree that your contributions will be licensed under its [Apache License 2.0](https://github.com/xujiajun/nutsdb/blob/master/LICENSE) License.
+By contributing, you agree that your contributions will be licensed under its [Apache License 2.0](https://github.com/blastbao/nutsdb/blob/master/LICENSE) License.

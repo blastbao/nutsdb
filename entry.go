@@ -20,7 +20,11 @@ import (
 )
 
 type (
+
+
 	// Entry represents the data item.
+	//
+	// Entry 代表索引数据，它包括了关联的元数据
 	Entry struct {
 		Key      []byte
 		Value    []byte
@@ -29,7 +33,11 @@ type (
 		position uint64
 	}
 
+
+
 	// Hint represents the index of the key
+	//
+	// Hint 代表了索引的 key
 	Hint struct {
 		key     []byte
 		fileID  int64
@@ -37,7 +45,13 @@ type (
 		dataPos uint64
 	}
 
+
+
 	// MetaData represents the meta information of the data item.
+	//
+	//
+	//
+	// 4 + 4 + 8 + 4 + 2 + len(bucket) + 4 + 2 + 2 = 30 + len(bucket)
 	MetaData struct {
 		keySize    uint32
 		valueSize  uint32
@@ -50,6 +64,8 @@ type (
 		status     uint16 // committed / uncommitted
 		ds         uint16 // data structure
 	}
+
+
 )
 
 // Size returns the size of the entry.
@@ -60,13 +76,18 @@ func (e *Entry) Size() int64 {
 // Encode returns the slice after the entry be encoded.
 //
 //  the entry stored format:
-//  |----------------------------------------------------------------------------------------------------------------|
-//  |  crc  | timestamp | ksz | valueSize | flag  | TTL  |bucketSize| status | ds   | txId |  bucket |  key  | value |
-//  |----------------------------------------------------------------------------------------------------------------|
-//  | uint32| uint64  |uint32 |  uint32 | uint16  | uint32| uint32 | uint16 | uint16 |uint64 |[]byte|[]byte | []byte |
-//  |----------------------------------------------------------------------------------------------------------------|
+//  |----------------------------------------------------------------------------------------------------------------------------|
+//  |  crc  | timestamp | ksz   | valueSize | flag    | TTL   | bucketSize | status | ds     | txId   |  bucket |  key  | value  |
+//  |-------------------------------------------------------------------------------------------------------------------|--------|
+//  | uint32| uint64    |uint32 |  uint32   | uint16  | uint32|  uint32    | uint16 | uint16 | uint64 |[]byte   |[]byte | []byte |
+//  |----------------------------------------------------------------------------------------------------------------------------|
+//
+//
+//
 //
 func (e *Entry) Encode() []byte {
+
+
 	keySize := e.Meta.keySize
 	valueSize := e.Meta.valueSize
 	bucketSize := e.Meta.bucketSize
@@ -81,7 +102,6 @@ func (e *Entry) Encode() []byte {
 
 	c32 := crc32.ChecksumIEEE(buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], c32)
-
 	return buf
 }
 
@@ -96,7 +116,6 @@ func (e *Entry) setEntryHeaderBuf(buf []byte) []byte {
 	binary.LittleEndian.PutUint16(buf[30:32], e.Meta.status)
 	binary.LittleEndian.PutUint16(buf[32:34], e.Meta.ds)
 	binary.LittleEndian.PutUint64(buf[34:42], e.Meta.txID)
-
 	return buf
 }
 

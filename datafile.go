@@ -78,35 +78,41 @@ func NewDataFile(path string, capacity int64, rwMode RWMode) (df *DataFile, err 
 }
 
 // ReadAt returns entry at the given off(offset).
+//
+// 从文件 offset 处读取一个 Entry
 func (df *DataFile) ReadAt(off int) (e *Entry, err error) {
+
 	buf := make([]byte, DataEntryHeaderSize)
 
+	// 从数据文件 off 处读取一个 EntryHeader
 	if _, err := df.rwManager.ReadAt(buf, int64(off)); err != nil {
 		return nil, err
 	}
 
+	// 解析 MetaData
 	meta := readMetaData(buf)
 
+	// 构造 Entry
 	e = &Entry{
 		crc:  binary.LittleEndian.Uint32(buf[0:4]),
 		Meta: meta,
 	}
 
+	// 无数据，返回
 	if e.IsZero() {
 		return nil, nil
 	}
 
-	// read bucket
+	// 读入 bucket 部分，存入 e.Meta.bucket
 	off += DataEntryHeaderSize
 	bucketBuf := make([]byte, meta.bucketSize)
 	_, err = df.rwManager.ReadAt(bucketBuf, int64(off))
 	if err != nil {
 		return nil, err
 	}
-
 	e.Meta.bucket = bucketBuf
 
-	// read key
+	// 读入 Key 部分，存入 e.Key
 	off += int(meta.bucketSize)
 	keyBuf := make([]byte, meta.keySize)
 
@@ -116,7 +122,7 @@ func (df *DataFile) ReadAt(off int) (e *Entry, err error) {
 	}
 	e.Key = keyBuf
 
-	// read value
+	// 读入 Value 部分，存入 e.Value
 	off += int(meta.keySize)
 	valBuf := make([]byte, meta.valueSize)
 	_, err = df.rwManager.ReadAt(valBuf, int64(off))
@@ -125,11 +131,13 @@ func (df *DataFile) ReadAt(off int) (e *Entry, err error) {
 	}
 	e.Value = valBuf
 
+	// 校验 CRC
 	crc := e.GetCrc(buf)
 	if crc != e.crc {
 		return nil, ErrCrc
 	}
 
+	// 成功返回
 	return
 }
 

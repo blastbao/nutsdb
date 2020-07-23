@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/bwmarrin/snowflake"
-	"github.com/xujiajun/nutsdb/ds/list"
-	"github.com/xujiajun/nutsdb/ds/set"
-	"github.com/xujiajun/nutsdb/ds/zset"
+	"github.com/blastbao/nutsdb/ds/list"
+	"github.com/blastbao/nutsdb/ds/set"
+	"github.com/blastbao/nutsdb/ds/zset"
 	"github.com/xujiajun/utils/strconv2"
 )
 
@@ -74,24 +74,25 @@ type Tx struct {
 // the current read/write transaction is completed.
 // All transactions must be closed by calling Commit() or Rollback() when done.
 func (db *DB) Begin(writable bool) (tx *Tx, err error) {
+	// 创建事务对象
 	tx, err = newTx(db, writable)
 	if err != nil {
 		return nil, err
 	}
 
+	// 事务加锁：写加独占锁、读加共享锁
 	tx.lock()
 
+	// 若数据库已关闭，释放锁，并报错
 	if db.closed {
 		tx.unlock()
 		return nil, ErrDBClosed
 	}
-
 	return
 }
 
 // newTx returns a newly initialized Tx object at given writable.
 func newTx(db *DB, writable bool) (tx *Tx, err error) {
-	var txID uint64
 
 	tx = &Tx{
 		db:                     db,
@@ -100,13 +101,13 @@ func newTx(db *DB, writable bool) (tx *Tx, err error) {
 		ReservedStoreTxIDIdxes: make(map[int64]*BPTree),
 	}
 
-	txID, err = tx.getTxID()
+	// 生成唯一事务 ID
+	txID, err := tx.getTxID()
 	if err != nil {
 		return nil, err
 	}
 
 	tx.id = txID
-
 	return
 }
 
@@ -118,22 +119,26 @@ func (tx *Tx) getTxID() (id uint64, err error) {
 	}
 
 	id = uint64(node.Generate().Int64())
-
 	return
 }
 
 // Commit commits the transaction, following these steps:
+// 	1. check the length of pendingWrites.If there are no writes, return immediately.
+// 	2. check if the ActiveFile has not enough space to store entry. if not, call rotateActiveFile function.
+// 	3. write pendingWrites to disk, if a non-nil error,return the error.
+// 	4. build Hint index.
+// 	5. Unlock the database and clear the db field.
 //
-// 1. check the length of pendingWrites.If there are no writes, return immediately.
+// 步骤：
+// 	1. 检查 pendingWrites 的长度。如果没有，立即返回。
+// 	2. 检查 ActiveFile 是否没有足够的空间来存储条目。如果没有足够空间，调用 rotateActiveFile 函数。
+// 	3. 将 pendingWrites 写入磁盘，如果出现错误，报错返回。
+// 	4. 建立 Hint 索引。
+// 	5. 解锁数据库，清除 db 字段。
 //
-// 2. check if the ActiveFile has not enough space to store entry. if not, call rotateActiveFile function.
-//
-// 3. write pendingWrites to disk, if a non-nil error,return the error.
-//
-// 4. build Hint index.
-//
-// 5. Unlock the database and clear the db field.
 func (tx *Tx) Commit() error {
+
+
 	var (
 		off            int64
 		e              *Entry
@@ -144,22 +149,29 @@ func (tx *Tx) Commit() error {
 		return ErrDBClosed
 	}
 
+	// 1.
 	writesLen := len(tx.pendingWrites)
-
 	if writesLen == 0 {
 		tx.unlock()
 		tx.db = nil
 		return nil
 	}
 
+	//
 	lastIndex := writesLen - 1
 	countFlag := CountFlagEnabled
 	if tx.db.isMerging {
 		countFlag = CountFlagDisabled
 	}
 
+
+	//
+
 	for i := 0; i < writesLen; i++ {
+
 		entry := tx.pendingWrites[i]
+
+		// 检查 entry 大小，超过限制则报错
 		entrySize := entry.Size()
 		if entrySize > tx.db.opt.SegmentSize {
 			return ErrKeyAndValSize
@@ -167,51 +179,72 @@ func (tx *Tx) Commit() error {
 
 		bucket := string(entry.Meta.bucket)
 
-		if tx.db.ActiveFile.ActualSize+entrySize > tx.db.opt.SegmentSize {
+		// 检查当前活跃数据文件是否足以容纳新的 entry ，若不足够则滚动文件，生成新文件
+		if tx.db.ActiveFile.ActualSize + entrySize > tx.db.opt.SegmentSize {
+			// 文件滚动，生成新数据文件
 			if err := tx.rotateActiveFile(); err != nil {
 				return err
 			}
 		}
 
+		// B+ 树索引
 		if entry.Meta.ds == DataStructureBPTree {
+			// 修改内存 Map ，本质是 Hash 表
 			tx.db.BPTreeKeyEntryPosMap[string(entry.Meta.bucket)+string(entry.Key)] = tx.db.ActiveFile.writeOff
 		}
 
+		// [核心] 只有最后一个记录的状态为 "committed"
 		if i == lastIndex {
 			entry.Meta.status = Committed
 		}
 
 		off = tx.db.ActiveFile.writeOff
-
+		// 把 entry 追加写入到当前数据文件中
 		if _, err := tx.db.ActiveFile.WriteAt(entry.Encode(), tx.db.ActiveFile.writeOff); err != nil {
 			return err
 		}
 
+		// 若需要持久化，调用 sync()
 		if tx.db.opt.SyncEnable {
 			if err := tx.db.ActiveFile.rwManager.Sync(); err != nil {
 				return err
 			}
 		}
 
+		// 修改文件写入偏移
 		tx.db.ActiveFile.ActualSize += entrySize
-
 		tx.db.ActiveFile.writeOff += entrySize
 
+		// B+ 树
 		if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
 			bucketMetaTemp = tx.buildTempBucketMetaIdx(bucket, entry.Key, bucketMetaTemp)
 		}
 
+
+		// 将最后一个记录写入到数据文件之后，才可以提交事务
 		if i == lastIndex {
+
+			// 事务 ID
 			txID := entry.Meta.txID
+
+			// 索引模式：B+ 树磁盘索引
 			if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+
+
+				// 将事务 ID 写入到提交树
 				if err := tx.buildTxIDRootIdx(txID, countFlag); err != nil {
 					return err
 				}
 
+
 				if err := tx.buildBucketMetaIdx(bucket, entry.Key, bucketMetaTemp); err != nil {
 					return err
 				}
+
+
+			// 索引模式：内存索引
 			} else {
+				// 把事务 ID 记录到已提交列表中
 				tx.db.committedTxIds[txID] = struct{}{}
 			}
 		}
@@ -221,17 +254,20 @@ func (tx *Tx) Commit() error {
 			e = entry
 		}
 
+		// B+ 树
 		if entry.Meta.ds == DataStructureBPTree {
+			// off : Entry 在数据文件的偏移
 			tx.buildBPTreeIdx(bucket, entry, e, off, countFlag)
 		}
 	}
 
+	// 将 pendingWrites 添加到 Set/List/SortedSet 的内存索引中
 	tx.buildIdxes(writesLen)
 
+	// 数据库解锁
 	tx.unlock()
-
+	// 重置变量
 	tx.db = nil
-
 	tx.pendingWrites = nil
 	tx.ReservedStoreTxIDIdxes = nil
 
@@ -239,20 +275,37 @@ func (tx *Tx) Commit() error {
 }
 
 func (tx *Tx) buildTempBucketMetaIdx(bucket string, key []byte, bucketMetaTemp BucketMeta) BucketMeta {
+
 	keySize := uint32(len(key))
+
 	if bucketMetaTemp.start == nil {
-		bucketMetaTemp = BucketMeta{start: key, end: key, startSize: keySize, endSize: keySize}
+
+		//
+		bucketMetaTemp = BucketMeta{
+			start: key,
+			end: key,
+			startSize: keySize,
+			endSize: keySize,
+		}
+
 	} else {
+
+
 		if compare(bucketMetaTemp.start, key) > 0 {
 			bucketMetaTemp.start = key
 			bucketMetaTemp.startSize = keySize
 		}
 
+
 		if compare(bucketMetaTemp.end, key) < 0 {
 			bucketMetaTemp.end = key
 			bucketMetaTemp.endSize = keySize
 		}
+
+
 	}
+
+
 
 	return bucketMetaTemp
 }
@@ -306,32 +359,43 @@ func (tx *Tx) buildBucketMetaIdx(bucket string, key []byte, bucketMetaTemp Bucke
 }
 
 func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
+
+
 	txIDStr := strconv2.IntToStr(int(txID))
 
 	tx.db.ActiveCommittedTxIdsIdx.Insert([]byte(txIDStr), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
+
+
 	if len(tx.ReservedStoreTxIDIdxes) > 0 {
+
+
 		for fID, txIDIdx := range tx.ReservedStoreTxIDIdxes {
-			filePath := tx.db.getBPTTxIDPath(fID)
 
-			txIDIdx.Insert([]byte(txIDStr), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
-			txIDIdx.Filepath = filePath
 
+			txIDPath := tx.db.getBPTTxIDPath(fID)
+
+			txIDIdx.Insert([]byte(txIDStr), nil, &Hint{ meta: &MetaData{Flag: DataSetFlag} }, countFlag)
+			txIDIdx.Filepath = txIDPath
+
+			// 写磁盘
 			err := txIDIdx.WriteNodes(tx.db.opt.RWMode, tx.db.opt.SyncEnable, 2)
 			if err != nil {
 				return err
 			}
 
-			filePath = tx.db.getBPTRootTxIDPath(fID)
+			txIDPath = tx.db.getBPTRootTxIDPath(fID)
 			txIDRootIdx := NewTree()
 			rootAddress := strconv2.Int64ToStr(txIDIdx.root.Address)
 
 			txIDRootIdx.Insert([]byte(rootAddress), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
-			txIDRootIdx.Filepath = filePath
+			txIDRootIdx.Filepath = txIDPath
 
 			err = txIDRootIdx.WriteNodes(tx.db.opt.RWMode, tx.db.opt.SyncEnable, 2)
 			if err != nil {
 				return err
 			}
+
+
 		}
 	}
 
@@ -341,36 +405,35 @@ func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 func (tx *Tx) buildIdxes(writesLen int) {
 	for i := 0; i < writesLen; i++ {
 		entry := tx.pendingWrites[i]
-
 		bucket := string(entry.Meta.bucket)
-
 		if entry.Meta.ds == DataStructureSet {
 			tx.buildSetIdx(bucket, entry)
 		}
-
 		if entry.Meta.ds == DataStructureSortedSet {
 			tx.buildSortedSetIdx(bucket, entry)
 		}
-
 		if entry.Meta.ds == DataStructureList {
 			tx.buildListIdx(bucket, entry)
 		}
-
 		tx.db.KeyCount++
 	}
 }
 
 func (tx *Tx) buildBPTreeIdx(bucket string, entry, e *Entry, off int64, countFlag bool) {
+
 	if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+		// IndexKey := bucket + key
 		newKey := []byte(bucket)
 		newKey = append(newKey, entry.Key...)
-		tx.db.ActiveBPTreeIdx.Insert(newKey, e, &Hint{
+		// 插入到 B+ 树
+		_ =	tx.db.ActiveBPTreeIdx.Insert(newKey, e, &Hint{
 			fileID:  tx.db.ActiveFile.fileID,
 			key:     newKey,
 			meta:    entry.Meta,
 			dataPos: uint64(off),
 		}, countFlag)
 	} else {
+
 		if _, ok := tx.db.BPTreeIdx[bucket]; !ok {
 			tx.db.BPTreeIdx[bucket] = NewTree()
 		}
@@ -378,12 +441,14 @@ func (tx *Tx) buildBPTreeIdx(bucket string, entry, e *Entry, off int64, countFla
 		if tx.db.BPTreeIdx[bucket] == nil {
 			tx.db.BPTreeIdx[bucket] = NewTree()
 		}
+
 		_ = tx.db.BPTreeIdx[bucket].Insert(entry.Key, e, &Hint{
 			fileID:  tx.db.ActiveFile.fileID,
 			key:     entry.Key,
 			meta:    entry.Meta,
 			dataPos: uint64(off),
 		}, countFlag)
+
 	}
 }
 
@@ -426,12 +491,12 @@ func (tx *Tx) buildSortedSetIdx(bucket string, entry *Entry) {
 }
 
 func (tx *Tx) buildListIdx(bucket string, entry *Entry) {
+
 	if _, ok := tx.db.ListIdx[bucket]; !ok {
 		tx.db.ListIdx[bucket] = list.New()
 	}
 
 	key, value := entry.Key, entry.Value
-
 	switch entry.Meta.Flag {
 	case DataLPushFlag:
 		_, _ = tx.db.ListIdx[bucket].LPush(string(key), value)
@@ -460,9 +525,14 @@ func (tx *Tx) buildListIdx(bucket string, entry *Entry) {
 
 // rotateActiveFile rotates log file when active file is not enough space to store the entry.
 func (tx *Tx) rotateActiveFile() error {
+
+
 	var err error
+
 	fID := tx.db.MaxFileID
 	tx.db.MaxFileID++
+
+
 
 	if !tx.db.opt.SyncEnable && tx.db.opt.RWMode == MMap {
 		if err := tx.db.ActiveFile.rwManager.Sync(); err != nil {
@@ -470,11 +540,17 @@ func (tx *Tx) rotateActiveFile() error {
 		}
 	}
 
+
 	if err := tx.db.ActiveFile.rwManager.Close(); err != nil {
 		return err
 	}
 
+
+
 	if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+
+
+
 		tx.db.ActiveBPTreeIdx.Filepath = tx.db.getBPTPath(fID)
 		tx.db.ActiveBPTreeIdx.enabledKeyPosMap = true
 		tx.db.ActiveBPTreeIdx.SetKeyPosMap(tx.db.BPTreeKeyEntryPosMap)
@@ -532,12 +608,11 @@ func (tx *Tx) Rollback() error {
 	if tx.db == nil {
 		return ErrDBClosed
 	}
-
+	// 释放数据库锁
 	tx.unlock()
-
+	// 清理变量
 	tx.db = nil
 	tx.pendingWrites = nil
-
 	return nil
 }
 
@@ -562,6 +637,8 @@ func (tx *Tx) unlock() {
 // Put sets the value for a key in the bucket.
 // a wrapper of the function put.
 func (tx *Tx) Put(bucket string, key, value []byte, ttl uint32) error {
+	// DataSetFlag => Set Data
+	// DataStructureBPTree => B+ tree
 	return tx.put(bucket, key, value, ttl, DataSetFlag, uint64(time.Now().Unix()), DataStructureBPTree)
 }
 
@@ -574,20 +651,30 @@ func (tx *Tx) checkTxIsClosed() error {
 
 // put sets the value for a key in the bucket.
 // Returns an error if tx is closed, if performing a write operation on a read-only transaction, if the key is empty.
+//
+//
+// flag
+//
+//
 func (tx *Tx) put(bucket string, key, value []byte, ttl uint32, flag uint16, timestamp uint64, ds uint16) error {
+
+	// 检查数据库是否已关闭
 	if err := tx.checkTxIsClosed(); err != nil {
 		return err
 	}
 
+	// 检查事务是否可写
 	if !tx.writable {
 		return ErrTxNotWritable
 	}
 
+	// 检查 key 是否为空
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 
-	tx.pendingWrites = append(tx.pendingWrites, &Entry{
+	// 构造 entry
+	entry := &Entry{
 		Key:   key,
 		Value: value,
 		Meta: &MetaData{
@@ -598,11 +685,14 @@ func (tx *Tx) put(bucket string, key, value []byte, ttl uint32, flag uint16, tim
 			TTL:        ttl,
 			bucket:     []byte(bucket),
 			bucketSize: uint32(len(bucket)),
-			status:     UnCommitted,
+			status:     UnCommitted,			// 未提交
 			ds:         ds,
 			txID:       tx.id,
 		},
-	})
+	}
+
+	// 将待写入的 entry 添加到 pending 队列
+	tx.pendingWrites = append(tx.pendingWrites, entry)
 
 	return nil
 }

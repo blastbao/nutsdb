@@ -70,6 +70,7 @@ func (bm *BucketMeta) Size() int64 {
 
 // ReadBucketMeta returns bucketMeta at given file path name.
 func ReadBucketMeta(name string) (bucketMeta *BucketMeta, err error) {
+
 	var off int64
 	fd, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0644)
 	defer fd.Close()
@@ -77,11 +78,13 @@ func ReadBucketMeta(name string) (bucketMeta *BucketMeta, err error) {
 		return
 	}
 
+
 	buf := make([]byte, BucketMetaHeaderSize)
 	_, err = fd.ReadAt(buf, off)
 	if err != nil {
 		return
 	}
+
 	startSize := binary.LittleEndian.Uint32(buf[4:8])
 	endSize := binary.LittleEndian.Uint32(buf[8:12])
 	bucketMeta = &BucketMeta{

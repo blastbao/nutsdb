@@ -69,15 +69,19 @@ const (
 	CountFlagDisabled = false
 
 	// BPTIndexSuffix returns b+ tree index suffix.
+	// B+树索引
 	BPTIndexSuffix = ".bptidx"
 
 	// BPTRootIndexSuffix returns b+ tree root index suffix.
+	// B+ 树根索引
 	BPTRootIndexSuffix = ".bptridx"
 
 	// BPTTxIDIndexSuffix returns b+ tree tx ID index suffix.
+	// B+ 树事务ID索引
 	BPTTxIDIndexSuffix = ".bpttxid"
 
 	// BPTRootTxIDIndexSuffix returns b+ tree root tx ID index suffix.
+	// B+ 树根事务ID索引
 	BPTRootTxIDIndexSuffix = ".bptrtxid"
 )
 
@@ -677,6 +681,9 @@ func (t *BPTree) checkAndSetLastKey(key []byte, h *Hint) {
 
 // Insert inserts record to the b+ tree,
 // and if the key exists, update the record and the counter(if countFlag set true,it will start count).
+//
+//
+//
 func (t *BPTree) Insert(key []byte, e *Entry, h *Hint, countFlag bool) error {
 	t.checkAndSetFirstKey(key, h)
 

@@ -18,7 +18,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/xujiajun/nutsdb/ds/set"
+	"github.com/blastbao/nutsdb/ds/set"
 )
 
 func (tx *Tx) sPut(bucket string, key []byte, dataFlag uint16, items ...[]byte) error {
@@ -67,7 +67,6 @@ func (tx *Tx) SIsMember(bucket string, key, item []byte) (bool, error) {
 		}
 		return true, nil
 	}
-
 	return false, ErrBucketAndKey(bucket, key)
 }
 

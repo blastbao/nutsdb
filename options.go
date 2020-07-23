@@ -18,30 +18,46 @@ package nutsdb
 type EntryIdxMode int
 
 const (
+
 	// HintKeyValAndRAMIdxMode represents ram index (key and value) mode.
+	//
+	// 内存索引
 	HintKeyValAndRAMIdxMode EntryIdxMode = iota
 
 	// HintKeyAndRAMIdxMode represents ram index (only key) mode.
+	//
+	// 内存索引
 	HintKeyAndRAMIdxMode
 
 	// HintBPTSparseIdxMode represents b+ tree sparse index mode.
+	//
+	// B+ 树磁盘索引
 	HintBPTSparseIdxMode
 )
 
 // Options records params for creating DB object.
 type Options struct {
+
 	// Dir represents Open the database located in which dir.
+	// 数据库位于的目录。
 	Dir string
 
 	// EntryIdxMode represents using which mode to index the entries.
+	// 用那种索引模式。
 	EntryIdxMode EntryIdxMode
 
 	// RWMode represents the read and write mode.
 	// RWMode includes two options: FileIO and MMap.
 	// FileIO represents the read and write mode using standard I/O.
 	// MMap represents the read and write mode using mmap.
+	//
+	//
+	// 读写模式：标准IO、MMAP
 	RWMode      RWMode
+
+	// 段大小
 	SegmentSize int64
+
 
 	// NodeNum represents the node number.
 	// Default NodeNum is 1. NodeNum range [1,1023].
