@@ -115,11 +115,12 @@ type (
 
 	// BinaryNode represents binary node.
 	BinaryNode struct {
+
 		// hint offset
 		Keys [order - 1]int64
+		Pointers    [order]int64
 		// 1. not leaf node represents node address
 		// 2. leaf node represents data address
-		Pointers    [order]int64
 		IsLeaf      uint16
 		KeysNum     uint16
 		Address     int64
@@ -156,7 +157,11 @@ func (t *BPTree) newLeaf() *Node {
 
 // NewTree returns a newly initialized BPTree Object that implements the BPTree.
 func NewTree() *BPTree {
-	return &BPTree{LastAddress: 0, keyPosMap: make(map[string]int64), enabledKeyPosMap: false}
+	return &BPTree{
+		LastAddress: 0,
+		keyPosMap: make(map[string]int64),
+		enabledKeyPosMap: false,
+	}
 }
 
 var queue *Node
@@ -683,13 +688,13 @@ func (t *BPTree) checkAndSetLastKey(key []byte, h *Hint) {
 // and if the key exists, update the record and the counter(if countFlag set true,it will start count).
 //
 //
-//
 func (t *BPTree) Insert(key []byte, e *Entry, h *Hint, countFlag bool) error {
-	t.checkAndSetFirstKey(key, h)
 
+	t.checkAndSetFirstKey(key, h)
 	t.checkAndSetLastKey(key, h)
 
 	if r, err := t.Find(key); err == nil && r != nil {
+
 		if countFlag && h.meta.Flag == DataDeleteFlag && r.H.meta.Flag != DataDeleteFlag && t.ValidKeyCount > 0 {
 			t.ValidKeyCount--
 		}
@@ -702,7 +707,10 @@ func (t *BPTree) Insert(key []byte, e *Entry, h *Hint, countFlag bool) error {
 	}
 
 	// Initialize the Record object When key does not exist.
-	pointer := &Record{H: h, E: e}
+	pointer := &Record{
+		H: h,
+		E: e,
+	}
 
 	// Update the validKeyCount number
 	t.ValidKeyCount++

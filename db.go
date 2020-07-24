@@ -139,10 +139,9 @@ type (
 		ListIdx                 ListIdx
 		ActiveFile              *DataFile
 
-		// 内存索引:存储key=>record
+		// 内存索引: 存储key=>record
 		ActiveBPTreeIdx         *BPTree
-
-		// 内存索引:存储已提交的事务ID
+		// 内存索引: 存储已提交的事务ID
 		ActiveCommittedTxIdsIdx *BPTree
 
 		committedTxIds          map[uint64]struct{}
@@ -668,8 +667,7 @@ func (db *DB) buildBPTreeIdx(bucket string, r *Record) error {
 
 func (db *DB) buildActiveBPTreeIdx(r *Record) error {
 	// Key = bucket + key
-	newKey := r.H.meta.bucket
-	newKey = append(newKey, r.H.key...)
+	newKey := append(r.H.meta.bucket, r.H.key...)
 	// 插入到 B+ 树索引中
 	if err := db.ActiveBPTreeIdx.Insert(newKey, r.E, r.H, CountFlagEnabled); err != nil {
 		return fmt.Errorf("when build BPTreeIdx insert index err: %s", err)
@@ -775,6 +773,7 @@ func (db *DB) buildHintIdx(dataFileIds []int) error {
 					if err = db.buildActiveBPTreeIdx(r); err != nil {
 						return err
 					}
+				// B+ 树内存索引
 				} else {
 					// 插入到 B+ 树中
 					if err = db.buildBPTreeIdx(bucket, r); err != nil {

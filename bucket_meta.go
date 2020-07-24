@@ -32,8 +32,8 @@ const (
 type BucketMeta struct {
 	startSize uint32
 	endSize   uint32
-	start     []byte
-	end       []byte
+	start     []byte	// 索引 key 的最小值
+	end       []byte	// 索引 key 的最大值
 	crc       uint32
 }
 
@@ -77,7 +77,6 @@ func ReadBucketMeta(name string) (bucketMeta *BucketMeta, err error) {
 	if err != nil {
 		return
 	}
-
 
 	buf := make([]byte, BucketMetaHeaderSize)
 	_, err = fd.ReadAt(buf, off)

@@ -138,7 +138,6 @@ func (tx *Tx) getTxID() (id uint64, err error) {
 //
 func (tx *Tx) Commit() error {
 
-
 	var (
 		off            int64
 		e              *Entry
@@ -164,9 +163,7 @@ func (tx *Tx) Commit() error {
 		countFlag = CountFlagDisabled
 	}
 
-
 	//
-
 	for i := 0; i < writesLen; i++ {
 
 		entry := tx.pendingWrites[i]
@@ -177,6 +174,7 @@ func (tx *Tx) Commit() error {
 			return ErrKeyAndValSize
 		}
 
+		// 确定 bucket
 		bucket := string(entry.Meta.bucket)
 
 		// 检查当前活跃数据文件是否足以容纳新的 entry ，若不足够则滚动文件，生成新文件
@@ -187,7 +185,7 @@ func (tx *Tx) Commit() error {
 			}
 		}
 
-		// B+ 树索引
+		// ????? B+ 树索引
 		if entry.Meta.ds == DataStructureBPTree {
 			// 修改内存 Map ，本质是 Hash 表
 			tx.db.BPTreeKeyEntryPosMap[string(entry.Meta.bucket)+string(entry.Key)] = tx.db.ActiveFile.writeOff
@@ -198,13 +196,14 @@ func (tx *Tx) Commit() error {
 			entry.Meta.status = Committed
 		}
 
+		// 记录下当前 off，用于后面更新索引。
 		off = tx.db.ActiveFile.writeOff
-		// 把 entry 追加写入到当前数据文件中
+
+		// [核心][数据落盘-1] 把 entry 追加写入到当前数据文件中
 		if _, err := tx.db.ActiveFile.WriteAt(entry.Encode(), tx.db.ActiveFile.writeOff); err != nil {
 			return err
 		}
-
-		// 若需要持久化，调用 sync()
+		// [核心][数据落盘-2] 调用 sync() 持久化
 		if tx.db.opt.SyncEnable {
 			if err := tx.db.ActiveFile.rwManager.Sync(); err != nil {
 				return err
@@ -220,27 +219,24 @@ func (tx *Tx) Commit() error {
 			bucketMetaTemp = tx.buildTempBucketMetaIdx(bucket, entry.Key, bucketMetaTemp)
 		}
 
-
 		// 将最后一个记录写入到数据文件之后，才可以提交事务
 		if i == lastIndex {
 
 			// 事务 ID
 			txID := entry.Meta.txID
 
-			// 索引模式：B+ 树磁盘索引
+			// 索引模式：B+ 树索引
 			if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
-
 
 				// 将事务 ID 写入到提交树
 				if err := tx.buildTxIDRootIdx(txID, countFlag); err != nil {
 					return err
 				}
 
-
+				// 更新 bucket 的信息，主要是 key 的范围
 				if err := tx.buildBucketMetaIdx(bucket, entry.Key, bucketMetaTemp); err != nil {
 					return err
 				}
-
 
 			// 索引模式：内存索引
 			} else {
@@ -254,11 +250,13 @@ func (tx *Tx) Commit() error {
 			e = entry
 		}
 
-		// B+ 树
+
+		// [核心][索引落盘] 把 Entry 存储到 B+ 树数据索引上，可以理解为是内存操作，不会失败，如果失败则是宕机、重启会重新构建。
 		if entry.Meta.ds == DataStructureBPTree {
 			// off : Entry 在数据文件的偏移
 			tx.buildBPTreeIdx(bucket, entry, e, off, countFlag)
 		}
+
 	}
 
 	// 将 pendingWrites 添加到 Set/List/SortedSet 的内存索引中
@@ -311,24 +309,29 @@ func (tx *Tx) buildTempBucketMetaIdx(bucket string, key []byte, bucketMetaTemp B
 }
 
 func (tx *Tx) buildBucketMetaIdx(bucket string, key []byte, bucketMetaTemp BucketMeta) error {
-	bucketMeta, ok := tx.db.bucketMetas[bucket]
 
-	start := bucketMetaTemp.start
-	startSize := uint32(len(start))
-	end := bucketMetaTemp.end
-	endSize := uint32(len(end))
+	start, startSize := bucketMetaTemp.start, uint32(len(bucketMetaTemp.start))
+	end, endSize := bucketMetaTemp.end, uint32(len(bucketMetaTemp.end))
+
 	var updateFlag bool
 
+	bucketMeta, ok := tx.db.bucketMetas[bucket]
 	if !ok {
-		bucketMeta = &BucketMeta{start: start, end: end, startSize: startSize, endSize: endSize}
+		bucketMeta = &BucketMeta{
+			start: start,
+			end: end,
+			startSize: startSize,
+			endSize: endSize,
+		}
 		updateFlag = true
 	} else {
+		// start 变小，则更新 start
 		if compare(bucketMeta.start, bucketMetaTemp.start) > 0 {
 			bucketMeta.start = start
 			bucketMeta.startSize = startSize
 			updateFlag = true
 		}
-
+		// end 变大，则更新 end
 		if compare(bucketMeta.end, bucketMetaTemp.end) < 0 {
 			bucketMeta.end = end
 			bucketMeta.endSize = endSize
@@ -336,44 +339,55 @@ func (tx *Tx) buildBucketMetaIdx(bucket string, key []byte, bucketMetaTemp Bucke
 		}
 	}
 
+	// 需要更新 bucket meta
 	if updateFlag {
+
+		// 打开 bucket meta 磁盘文件
 		fd, err := os.OpenFile(tx.db.getBucketMetaFilePath(bucket), os.O_CREATE|os.O_RDWR, 0644)
 		defer fd.Close()
 		if err != nil {
 			return err
 		}
 
+		// 覆盖写入新 bucket meta 信息
 		if _, err = fd.WriteAt(bucketMeta.Encode(), 0); err != nil {
 			return err
 		}
 
+		// sync()
 		if tx.db.opt.SyncEnable {
 			if err = fd.Sync(); err != nil {
 				return err
 			}
 		}
+
+		// 重新读入到内存
 		tx.db.bucketMetas[bucket] = bucketMeta
 	}
 
 	return nil
 }
 
-func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 
+
+
+
+
+
+func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 
 	txIDStr := strconv2.IntToStr(int(txID))
 
+	// 把 txID 插入到已提交的事务 ID B+ 树索引中
 	tx.db.ActiveCommittedTxIdsIdx.Insert([]byte(txIDStr), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
 
-
+	// 如果事务中，数据文件发生滚动，关联的 TxID B+ 树也会滚动
 	if len(tx.ReservedStoreTxIDIdxes) > 0 {
 
-
+		// 遍历这些被滚动的 TxID B+ 树索引
 		for fID, txIDIdx := range tx.ReservedStoreTxIDIdxes {
 
-
 			txIDPath := tx.db.getBPTTxIDPath(fID)
-
 			txIDIdx.Insert([]byte(txIDStr), nil, &Hint{ meta: &MetaData{Flag: DataSetFlag} }, countFlag)
 			txIDIdx.Filepath = txIDPath
 
@@ -384,9 +398,9 @@ func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 			}
 
 			txIDPath = tx.db.getBPTRootTxIDPath(fID)
-			txIDRootIdx := NewTree()
 			rootAddress := strconv2.Int64ToStr(txIDIdx.root.Address)
 
+			txIDRootIdx := NewTree()
 			txIDRootIdx.Insert([]byte(rootAddress), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
 			txIDRootIdx.Filepath = txIDPath
 
@@ -394,14 +408,13 @@ func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 			if err != nil {
 				return err
 			}
-
-
 		}
 	}
 
 	return nil
 }
 
+// 将 tx.pendingWrites[] 添加到 Set/List/SortedSet 的内存索引中
 func (tx *Tx) buildIdxes(writesLen int) {
 	for i := 0; i < writesLen; i++ {
 		entry := tx.pendingWrites[i]
@@ -419,19 +432,31 @@ func (tx *Tx) buildIdxes(writesLen int) {
 	}
 }
 
+//
 func (tx *Tx) buildBPTreeIdx(bucket string, entry, e *Entry, off int64, countFlag bool) {
 
 	if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
-		// IndexKey := bucket + key
-		newKey := []byte(bucket)
-		newKey = append(newKey, entry.Key...)
+
+		// 构造索引键：IndexKey := bucket + key
+		idxKey := append([]byte(bucket), entry.Key...)
+
 		// 插入到 B+ 树
-		_ =	tx.db.ActiveBPTreeIdx.Insert(newKey, e, &Hint{
-			fileID:  tx.db.ActiveFile.fileID,
-			key:     newKey,
-			meta:    entry.Meta,
-			dataPos: uint64(off),
-		}, countFlag)
+		_ =	tx.db.ActiveBPTreeIdx.Insert(
+			// 索引键
+			idxKey,
+			// 数据项
+			e,
+			// 索引项
+			&Hint{
+				fileID:  tx.db.ActiveFile.fileID,
+				key:     idxKey,
+				meta:    entry.Meta,
+				dataPos: uint64(off),
+			},
+			// 计数标记
+			countFlag,
+		)
+
 	} else {
 
 		if _, ok := tx.db.BPTreeIdx[bucket]; !ok {
@@ -442,12 +467,17 @@ func (tx *Tx) buildBPTreeIdx(bucket string, entry, e *Entry, off int64, countFla
 			tx.db.BPTreeIdx[bucket] = NewTree()
 		}
 
-		_ = tx.db.BPTreeIdx[bucket].Insert(entry.Key, e, &Hint{
-			fileID:  tx.db.ActiveFile.fileID,
-			key:     entry.Key,
-			meta:    entry.Meta,
-			dataPos: uint64(off),
-		}, countFlag)
+		_ = tx.db.BPTreeIdx[bucket].Insert(
+			entry.Key,
+			e,
+			&Hint{
+				fileID:  tx.db.ActiveFile.fileID,
+				key:     entry.Key,
+				meta:    entry.Meta,
+				dataPos: uint64(off),
+			},
+			countFlag,
+		)
 
 	}
 }
@@ -532,34 +562,31 @@ func (tx *Tx) rotateActiveFile() error {
 	fID := tx.db.MaxFileID
 	tx.db.MaxFileID++
 
-
-
 	if !tx.db.opt.SyncEnable && tx.db.opt.RWMode == MMap {
 		if err := tx.db.ActiveFile.rwManager.Sync(); err != nil {
 			return err
 		}
 	}
 
-
 	if err := tx.db.ActiveFile.rwManager.Close(); err != nil {
 		return err
 	}
 
-
-
+	// B+ 树稀疏索引
 	if tx.db.opt.EntryIdxMode == HintBPTSparseIdxMode {
 
-
-
+		// 获取当前 fileId 对应的 b+ 树索引文件路径，"xxx.bptidx"
 		tx.db.ActiveBPTreeIdx.Filepath = tx.db.getBPTPath(fID)
 		tx.db.ActiveBPTreeIdx.enabledKeyPosMap = true
 		tx.db.ActiveBPTreeIdx.SetKeyPosMap(tx.db.BPTreeKeyEntryPosMap)
 
+		// 将 B+ 树落盘
 		err = tx.db.ActiveBPTreeIdx.WriteNodes(tx.db.opt.RWMode, tx.db.opt.SyncEnable, 1)
 		if err != nil {
 			return err
 		}
 
+		// 将 B+ 树元数据落盘，主要是根结点信息
 		BPTreeRootIdx := &BPTreeRootIdx{
 			rootOff:   uint64(tx.db.ActiveBPTreeIdx.root.Address),
 			fID:       uint64(fID),
@@ -569,12 +596,13 @@ func (tx *Tx) rotateActiveFile() error {
 			end:       tx.db.ActiveBPTreeIdx.LastKey,
 		}
 
-		_, err := BPTreeRootIdx.Persistence(tx.db.getBPTRootPath(fID),
-			0, tx.db.opt.SyncEnable)
+		// 将 root 索引对象写入到文件 "xxx.bptridx" 中
+		_, err := BPTreeRootIdx.Persistence(tx.db.getBPTRootPath(fID), 0, tx.db.opt.SyncEnable)
 		if err != nil {
 			return err
 		}
 
+		// 保存到内存数组中
 		tx.db.BPTreeRootIdxes = append(tx.db.BPTreeRootIdxes, BPTreeRootIdx)
 
 		// clear and reset BPTreeKeyEntryPosMap
@@ -585,6 +613,7 @@ func (tx *Tx) rotateActiveFile() error {
 		tx.db.ActiveBPTreeIdx = nil
 		tx.db.ActiveBPTreeIdx = NewTree()
 
+
 		tx.ReservedStoreTxIDIdxes[fID] = tx.db.ActiveCommittedTxIdsIdx
 
 		// clear and reset ActiveCommittedTxIdsIdx
@@ -592,13 +621,13 @@ func (tx *Tx) rotateActiveFile() error {
 		tx.db.ActiveCommittedTxIdsIdx = NewTree()
 	}
 
-	// reset ActiveFile
+
+	// 重置 ActiveFile
 	path := tx.db.getDataPath(tx.db.MaxFileID)
 	tx.db.ActiveFile, err = NewDataFile(path, tx.db.opt.SegmentSize, tx.db.opt.RWMode)
 	if err != nil {
 		return err
 	}
-
 	tx.db.ActiveFile.fileID = tx.db.MaxFileID
 	return nil
 }

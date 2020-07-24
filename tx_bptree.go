@@ -38,8 +38,6 @@ func (tx *Tx) getByHintBPTSparseIdxInMem(bucket string, key []byte) (e *Entry, e
 	// Read in memory.
 
 
-
-
 	// 从内存索引中读取 key 关联的 record
 	r, err := tx.db.ActiveBPTreeIdx.Find(key)
 
@@ -67,15 +65,12 @@ func (tx *Tx) getByHintBPTSparseIdxOnDisk(bucket string, key []byte) (entry *Ent
 
 	// Read on disk.
 
-
-
-
 	var bptSparseIdxGroup []*BPTreeRootIdx
 
 	for _, bptRootIdxPointer := range tx.db.BPTreeRootIdxes {
 		bptSparseIdxGroup = append(bptSparseIdxGroup, &BPTreeRootIdx{
-			fID:     bptRootIdxPointer.fID,			// fileID
-			rootOff: bptRootIdxPointer.rootOff,		//
+			fID:     bptRootIdxPointer.fID,			// 关联数据文件的 fileID
+			rootOff: bptRootIdxPointer.rootOff,		// 关联索引文件的 root offset
 			start:   bptRootIdxPointer.start,		//
 			end:     bptRootIdxPointer.end,			//
 		})
@@ -89,34 +84,29 @@ func (tx *Tx) getByHintBPTSparseIdxOnDisk(bucket string, key []byte) (entry *Ent
 	// IndexKey = bucket + key
 	newKey := getNewKey(bucket, key)
 
-
-	for _, bptSparse := range bptSparseIdxGroup {
+	for _, idx := range bptSparseIdxGroup {
 
 		// 区间查询： start <= IndexKey <= end
-		if compare(newKey, bptSparse.start) >= 0 && compare(newKey, bptSparse.end) <= 0 {
+		if compare(newKey, idx.start) >= 0 && compare(newKey, idx.end) <= 0 {
 
-
-			fileID := bptSparse.fID
-			rootOff := bptSparse.rootOff
-
-
-			entry, err = tx.FindOnDisk(fileID, rootOff, key, newKey)
+			// 搜索 B+ 树，得到 newKey 在 data 文件中 offset，进而读取出对应 entry 。
+			entry, err = tx.FindOnDisk(idx.fID, idx.rootOff, key, newKey)
 
 			if err == nil && entry != nil {
 
-				// 过滤已删除和已过期的数据
+				// 过滤已删除和已过期的 entry
 				if entry.Meta.Flag == DataDeleteFlag || IsExpired(entry.Meta.TTL, entry.Meta.timestamp) {
 					return nil, ErrNotFoundKey
 				}
 
-				// 查询内存：若事务已经提交，则直接返回
+				// 若事务已经提交，则直接返回
 				txIDStr := strconv2.Int64ToStr(int64(entry.Meta.txID))
 				if _, err := tx.db.ActiveCommittedTxIdsIdx.Find([]byte(txIDStr)); err == nil {
 					return entry, err
 				}
 
-				// 查询磁盘：若事务尚未提交，则报错
-				if ok, _ := tx.FindTxIDOnDisk(fileID, entry.Meta.txID); !ok {
+				// 从 B+ 树中查找 txid ，成功返回 true ，代表已经提交
+				if ok, _ := tx.FindTxIDOnDisk(idx.fID, entry.Meta.txID); !ok {
 					return nil, ErrNotFoundKey
 				}
 
@@ -131,9 +121,9 @@ func (tx *Tx) getByHintBPTSparseIdxOnDisk(bucket string, key []byte) (entry *Ent
 
 func (tx *Tx) getByHintBPTSparseIdx(bucket string, key []byte) (e *Entry, err error) {
 
-
 	newKey := getNewKey(bucket, key)
 
+	// 内存查询
 	entry, err := tx.getByHintBPTSparseIdxInMem(bucket, newKey)
 	if entry != nil && err == nil {
 		if entry.Meta.Flag == DataDeleteFlag || IsExpired(entry.Meta.TTL, entry.Meta.timestamp) {
@@ -142,6 +132,7 @@ func (tx *Tx) getByHintBPTSparseIdx(bucket string, key []byte) (e *Entry, err er
 		return entry, err
 	}
 
+	// 磁盘查询
 	entry, err = tx.getByHintBPTSparseIdxOnDisk(bucket, key)
 	if entry != nil && err == nil {
 		return entry, err
@@ -151,11 +142,14 @@ func (tx *Tx) getByHintBPTSparseIdx(bucket string, key []byte) (e *Entry, err er
 }
 
 func (tx *Tx) getAllByHintBPTSparseIdx(bucket string) (entries Entries, err error) {
+
+	// 读取 Bucket Meta 信息
 	bucketMeta, err := ReadBucketMeta(tx.db.getBucketMetaFilePath(bucket))
 	if err != nil {
 		return nil, err
 	}
 
+	//
 	return tx.RangeScan(bucket, bucketMeta.start, bucketMeta.end)
 }
 
@@ -163,18 +157,25 @@ func (tx *Tx) getAllByHintBPTSparseIdx(bucket string) (entries Entries, err erro
 // The returned value is only valid for the life of the transaction.
 func (tx *Tx) Get(bucket string, key []byte) (e *Entry, err error) {
 
+
+	// 数据库已关闭？
 	if err := tx.checkTxIsClosed(); err != nil {
 		return nil, err
 	}
 
+	// 索引模式？
 	idxMode := tx.db.opt.EntryIdxMode
 
+	// B+ 树索引？
 	if idxMode == HintBPTSparseIdxMode {
 		return tx.getByHintBPTSparseIdx(bucket, key)
 	}
 
+	//
 	if idxMode == HintKeyValAndRAMIdxMode || idxMode == HintKeyAndRAMIdxMode {
+
 		if idx, ok := tx.db.BPTreeIdx[bucket]; ok {
+
 			r, err := idx.Find(key)
 			if err != nil {
 				return nil, err
@@ -193,6 +194,7 @@ func (tx *Tx) Get(bucket string, key []byte) (e *Entry, err error) {
 			}
 
 			if idxMode == HintKeyAndRAMIdxMode {
+
 				path := tx.db.getDataPath(r.H.fileID)
 				df, err := NewDataFile(path, tx.db.opt.SegmentSize, tx.db.opt.RWMode)
 				defer df.rwManager.Close()
@@ -217,6 +219,7 @@ func (tx *Tx) Get(bucket string, key []byte) (e *Entry, err error) {
 //GetAll returns all keys and values of the bucket stored at given bucket.
 func (tx *Tx) GetAll(bucket string) (entries Entries, err error) {
 
+	// 数据库已关闭？
 	if err := tx.checkTxIsClosed(); err != nil {
 		return nil, err
 	}
@@ -924,26 +927,35 @@ func (tx *Tx) getHintIdxDataItemsWrapper(records Records, limitNum int, es Entri
 }
 
 // FindTxIDOnDisk returns if txId on disk at given fid and txID.
+//
+// 1. 根据 fileId 查找对应的 B+ 树索引的元数据
+// 2. 根据 B+ 树索引元数据，定位到 B+ 树索引 root 结点
+// 3. 从 root 开始深度搜索，查找 txID 所位于的 lead node
+// 4. 顺序遍历 leaf node 查找和  txID 匹配的数据条目，找到则返回 true
 func (tx *Tx) FindTxIDOnDisk(fID, txID uint64) (ok bool, err error) {
+
 	var i uint16
 
-	filepath := tx.db.getBPTRootTxIDPath(int64(fID))
-	node, err := ReadNode(filepath, 0)
+	// 读取 ".bptrtxid" 文件，它存储着 B+ 树索引的元数据
+	idxMetaPath := tx.db.getBPTRootTxIDPath(int64(fID))
+	idxMetaNode, err := ReadNode(idxMetaPath, 0)
 
 	if err != nil {
 		return false, err
 	}
 
-	filepath = tx.db.getBPTTxIDPath(int64(fID))
-	rootAddress := node.Keys[0]
-	curr, err := ReadNode(filepath, rootAddress)
+	// 读取 ".bpttxid" 文件，它存储着 B+ 树的数据
+	idxPath := tx.db.getBPTTxIDPath(int64(fID))
+	rootAddress := idxMetaNode.Keys[0]
 
+	curr, err := ReadNode(idxPath, rootAddress)
 	if err != nil {
 		return false, err
 	}
 
 	txIDStr := strconv2.IntToStr(int(txID))
 
+	// 定位到 leaf node
 	for curr.IsLeaf != 1 {
 		i = 0
 		for i < curr.KeysNum {
@@ -955,13 +967,14 @@ func (tx *Tx) FindTxIDOnDisk(fID, txID uint64) (ok bool, err error) {
 		}
 
 		address := curr.Pointers[i]
-		curr, err = ReadNode(filepath, int64(address))
+		curr, err = ReadNode(idxPath, int64(address))
 	}
 
 	if curr == nil {
 		return false, ErrKeyNotFound
 	}
 
+	// 遍历 leaf node ，查找和 txID 匹配的目标记录
 	for i = 0; i < curr.KeysNum; i++ {
 		if compare([]byte(txIDStr), []byte(strconv2.Int64ToStr(curr.Keys[i]))) == 0 {
 			break
@@ -976,27 +989,36 @@ func (tx *Tx) FindTxIDOnDisk(fID, txID uint64) (ok bool, err error) {
 }
 
 // FindOnDisk returns entry on disk at given fID, rootOff and key.
+//
+// 1. 根据 newKey 去深搜 B+ 树，确定 leaf Node
+// 2. 遍历 leaf node 的 offsets ，去 data 文件逐个 entry 读取和比较
+// 3. 找到 newKey 对应的 entry ，返回
+//
 func (tx *Tx) FindOnDisk(fID uint64, rootOff uint64, key, newKey []byte) (entry *Entry, err error) {
 	var (
 		bnLeaf *BinaryNode
 		i      uint16
-		df     *DataFile
+		dataFile *DataFile
 	)
 
+	// 从 root 结点深度搜索 B+ 树，定位到 newKey 所属的 leaf 结点
 	bnLeaf, err = tx.FindLeafOnDisk(int64(fID), int64(rootOff), key, newKey)
 
+	// 若没找到，即不存在
 	if bnLeaf == nil {
 		return nil, ErrKeyNotFound
 	}
 
+	// 遍历叶子结点，逐个根据 offset 读取 entry 进行比较判断，若找到 newKey 对应的 entry 则返回
 	for i = 0; i < bnLeaf.KeysNum; i++ {
-		df, err = NewDataFile(tx.db.getDataPath(int64(fID)), tx.db.opt.SegmentSize, tx.db.opt.RWMode)
+
+		dataFile, err = NewDataFile(tx.db.getDataPath(int64(fID)), tx.db.opt.SegmentSize, tx.db.opt.RWMode)
 		if err != nil {
 			return nil, err
 		}
 
-		entry, err = df.ReadAt(int(bnLeaf.Keys[i]))
-		df.rwManager.Close()
+		entry, err = dataFile.ReadAt(int(bnLeaf.Keys[i]))
+		dataFile.rwManager.Close()
 
 		if err != nil {
 			return nil, err
@@ -1008,6 +1030,7 @@ func (tx *Tx) FindOnDisk(fID uint64, rootOff uint64, key, newKey []byte) (entry 
 		}
 	}
 
+	// 若没找到，即不存在
 	if i == bnLeaf.KeysNum {
 		return nil, ErrKeyNotFound
 	}
@@ -1016,38 +1039,40 @@ func (tx *Tx) FindOnDisk(fID uint64, rootOff uint64, key, newKey []byte) (entry 
 }
 
 // FindLeafOnDisk returns binary leaf node on disk at given fId, rootOff and key.
-func (tx *Tx) FindLeafOnDisk(fID int64, rootOff int64, key, newKey []byte) (bn *BinaryNode, err error) {
+func (tx *Tx) FindLeafOnDisk(fileID int64, rootOff int64, key, newKey []byte) (bn *BinaryNode, err error) {
+
 	var i uint16
 	var curr *BinaryNode
 
-	filePath := tx.db.getBPTPath(fID)
-	curr, err = ReadNode(filePath, rootOff)
+	dataPath := tx.db.getDataPath(fileID)
+	indexPath := tx.db.getBPTPath(fileID)
+
+	// 读取 root 结点
+	curr, err = ReadNode(indexPath, rootOff)
 	if err != nil {
 		return nil, err
 	}
 
-
+	// not leaf node represents node address
 	for curr.IsLeaf != 1 {
-
 
 		i = 0
 
 		for i < curr.KeysNum {
 
-
-			dataFile, err := NewDataFile(tx.db.getDataPath(fID), tx.db.opt.SegmentSize, tx.db.opt.RWMode)
+			dataFile, err := NewDataFile(dataPath, tx.db.opt.SegmentSize, tx.db.opt.RWMode)
 			if err != nil {
 				return nil, err
 			}
 
-			item, err := dataFile.ReadAt(int(curr.Keys[i]))
+			entry, err := dataFile.ReadAt(int(curr.Keys[i]))
 			dataFile.rwManager.Close()
 
 			if err != nil {
 				return nil, err
 			}
 
-			newKeyTemp := getNewKey(string(item.Meta.bucket), item.Key)
+			newKeyTemp := getNewKey(string(entry.Meta.bucket), entry.Key)
 			if compare(newKey, newKeyTemp) >= 0 {
 				i++
 			} else {
@@ -1056,7 +1081,7 @@ func (tx *Tx) FindLeafOnDisk(fID int64, rootOff int64, key, newKey []byte) (bn *
 		}
 
 		address := curr.Pointers[i]
-		curr, err = ReadNode(filePath, address)
+		curr, err = ReadNode(indexPath, address)
 	}
 
 	return curr, nil

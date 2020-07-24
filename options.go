@@ -31,7 +31,7 @@ const (
 
 	// HintBPTSparseIdxMode represents b+ tree sparse index mode.
 	//
-	// B+ 树磁盘索引
+	// B+ 树稀疏索引：索引与数据是分别存在两个文件中。
 	HintBPTSparseIdxMode
 )
 

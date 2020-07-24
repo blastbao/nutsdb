@@ -81,17 +81,22 @@ func (bri *BPTreeRootIdx) IsZero() bool {
 
 // ReadBPTreeRootIdxAt reads BPTreeRootIdx entry from the File starting at byte offset off.
 func ReadBPTreeRootIdxAt(path string, off int64) (*BPTreeRootIdx, error) {
+
 	buf := make([]byte, BPTreeRootIdxHeaderSize)
 
+	// 打开文件
 	fd, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 
+	// 读取 28B 的 Header
 	_, err = fd.ReadAt(buf, off)
 	if err != nil {
 		return nil, err
 	}
+
+	// 解析 Header
 	bri := &BPTreeRootIdx{}
 	bri.fID = binary.LittleEndian.Uint64(buf[4:12])
 	bri.rootOff = binary.LittleEndian.Uint64(buf[12:20])
@@ -102,6 +107,7 @@ func ReadBPTreeRootIdxAt(path string, off int64) (*BPTreeRootIdx, error) {
 		return nil, nil
 	}
 
+	// 读取 bri.startSize 个字节的 startSize
 	off += BPTreeRootIdxHeaderSize
 	startBuf := make([]byte, bri.startSize)
 	_, err = fd.ReadAt(startBuf, off)
@@ -110,6 +116,7 @@ func ReadBPTreeRootIdxAt(path string, off int64) (*BPTreeRootIdx, error) {
 	}
 	bri.start = startBuf
 
+	// 读取 bri.endSize 个字节的 endSize
 	off += int64(bri.startSize)
 	endBuf := make([]byte, bri.endSize)
 	_, err = fd.ReadAt(endBuf, off)
@@ -118,6 +125,7 @@ func ReadBPTreeRootIdxAt(path string, off int64) (*BPTreeRootIdx, error) {
 	}
 	bri.end = endBuf
 
+	// 读取 4B 的 crc
 	bri.crc = binary.LittleEndian.Uint32(buf[0:4])
 	if bri.GetCrc(buf) != bri.crc {
 		return nil, ErrCrc
@@ -128,16 +136,21 @@ func ReadBPTreeRootIdxAt(path string, off int64) (*BPTreeRootIdx, error) {
 
 // Persistence writes BPTreeRootIdx entry to the File starting at byte offset off.
 func (bri *BPTreeRootIdx) Persistence(path string, offset int64, syncEnable bool) (number int, err error) {
+
+	// 打开文件
 	fd, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	defer fd.Close()
 
+	// 编码数据
 	data := bri.Encode()
 
+	// 写入到文件 offset 处
 	n, err := fd.WriteAt(data, offset)
 	if err != nil {
 		return 0, err
 	}
 
+	// Sync()
 	if syncEnable {
 		err = fd.Sync()
 		if err != nil {
@@ -147,11 +160,15 @@ func (bri *BPTreeRootIdx) Persistence(path string, offset int64, syncEnable bool
 	return n, err
 }
 
+
+
+
 // BPTreeRootIdxWrapper records BSGroup and by, in order to sort.
 type BPTreeRootIdxWrapper struct {
 	BSGroup []*BPTreeRootIdx
 	by      func(p, q *BPTreeRootIdx) bool
 }
+
 
 // Len is the number of elements in the collection bsw.BSGroup.
 func (bsw BPTreeRootIdxWrapper) Len() int {
