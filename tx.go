@@ -250,13 +250,11 @@ func (tx *Tx) Commit() error {
 			e = entry
 		}
 
-
 		// [核心][索引落盘] 把 Entry 存储到 B+ 树数据索引上，可以理解为是内存操作，不会失败，如果失败则是宕机、重启会重新构建。
 		if entry.Meta.ds == DataStructureBPTree {
 			// off : Entry 在数据文件的偏移
 			tx.buildBPTreeIdx(bucket, entry, e, off, countFlag)
 		}
-
 	}
 
 	// 将 pendingWrites 添加到 Set/List/SortedSet 的内存索引中
@@ -369,11 +367,6 @@ func (tx *Tx) buildBucketMetaIdx(bucket string, key []byte, bucketMetaTemp Bucke
 }
 
 
-
-
-
-
-
 func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 
 	txIDStr := strconv2.IntToStr(int(txID))
@@ -381,29 +374,33 @@ func (tx *Tx) buildTxIDRootIdx(txID uint64, countFlag bool) error {
 	// 把 txID 插入到已提交的事务 ID B+ 树索引中
 	tx.db.ActiveCommittedTxIdsIdx.Insert([]byte(txIDStr), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
 
-	// 如果事务中，数据文件发生滚动，关联的 TxID B+ 树也会滚动
+
+	// 如果在事务中，数据文件发生滚动，意味着事务 txID 写入的数据，出现在多个数据文件中。
+	//
+	// 每个数据文件都存在一个关联的 commited txid 索引，
+	//
+	//
+	// 因此，在提交 txID 时，把 txID 添加到滚动的各个 file_id 数据文件关联的 commit txid 索引中，同时将其落盘。
+	//
 	if len(tx.ReservedStoreTxIDIdxes) > 0 {
 
 		// 遍历这些被滚动的 TxID B+ 树索引
 		for fID, txIDIdx := range tx.ReservedStoreTxIDIdxes {
 
-			txIDPath := tx.db.getBPTTxIDPath(fID)
+			// 把 fID 关联的、用于存储已提交的 txid 的 B+ 树索引，存储到 /txid/file_id.bpttxid 文件中。
 			txIDIdx.Insert([]byte(txIDStr), nil, &Hint{ meta: &MetaData{Flag: DataSetFlag} }, countFlag)
-			txIDIdx.Filepath = txIDPath
+			txIDIdx.Filepath = tx.db.getBPTTxIDPath(fID)
 
-			// 写磁盘
+			// 落盘
 			err := txIDIdx.WriteNodes(tx.db.opt.RWMode, tx.db.opt.SyncEnable, 2)
 			if err != nil {
 				return err
 			}
 
-			txIDPath = tx.db.getBPTRootTxIDPath(fID)
-			rootAddress := strconv2.Int64ToStr(txIDIdx.root.Address)
-
+			// 刚刚落盘的这颗 B+ 树的元数据存储到 /txid/file_id.bptrtxid 文件中。
 			txIDRootIdx := NewTree()
-			txIDRootIdx.Insert([]byte(rootAddress), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
-			txIDRootIdx.Filepath = txIDPath
-
+			txIDRootIdx.Insert([]byte(strconv2.Int64ToStr(txIDIdx.root.Address)), nil, &Hint{meta: &MetaData{Flag: DataSetFlag}}, countFlag)
+			txIDRootIdx.Filepath = tx.db.getBPTRootTxIDPath(fID)
 			err = txIDRootIdx.WriteNodes(tx.db.opt.RWMode, tx.db.opt.SyncEnable, 2)
 			if err != nil {
 				return err
@@ -553,7 +550,45 @@ func (tx *Tx) buildListIdx(bucket string, entry *Entry) {
 	}
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // rotateActiveFile rotates log file when active file is not enough space to store the entry.
+//
+//
+// 文件滚动
+//
+// 1. 调用 sync() 和 close() 关闭当前数据文件 /file_id.dat ，结束写入。
+//
+// 2. db.ActiveBPTreeIdx 中存储当前数据文件的 B+ 树索引，需要落到磁盘文件 /bpt/file_id.bptidx 上。
+//
+// 3. 将 db.ActiveBPTreeIdx 落到磁盘后，把它的元信息 BPTreeRootIdx 落到磁盘文件 /bpt/root/file_id.bptridx 上。
+//
+// 4. 至此，已经完成滚动前的落盘操作，下面执行一组内存操作：
+//
+//		4.1. 把滚动后的 B+ 树索引元数据 BPTreeRootIdx 添加到内存数组 tx.db.BPTreeRootIdxes 中
+//		4.2. 把 db.ActiveBPTreeIdx 清空&重置
+//		4.3. 把当前数据文件关联的已提交事务索引 db.ActiveCommittedTxIdsIdx 移动到 tx.ReservedStoreTxIDIdxes[fID] 中，然后清空&重置 db.ActiveCommittedTxIdsIdx
+//
+//
+// 5. db.ActiveCommittedTxIdsIdx 中存储当前数据文件的 committed txid B+ 树索引，需要落到磁盘文件 /txid/file_id.bpttxid 上。
+//
+//
+//
+// 5. 完成滚动，递增文件 ID ，打开新的数据文件接受新的写入请求。
+//
+//
 func (tx *Tx) rotateActiveFile() error {
 
 
@@ -568,6 +603,7 @@ func (tx *Tx) rotateActiveFile() error {
 		}
 	}
 
+	// 关闭
 	if err := tx.db.ActiveFile.rwManager.Close(); err != nil {
 		return err
 	}
@@ -614,8 +650,15 @@ func (tx *Tx) rotateActiveFile() error {
 		tx.db.ActiveBPTreeIdx = NewTree()
 
 
+		// 每个数据文件有唯一关联的、用于存储已提交的 txid 的 B+ 树索引，当数据文件发生滚动时，需要把这个索引也落盘。
+		//
+		// 当前数据文件 tx.db.ActiveFile 关联的索引即 db.ActiveCommittedTxIdsIdx ，所以当写事务发生滚动时，
+		// 将 db.ActiveCommittedTxIdsIdx 暂存到 tx 的成员变量中，然后重置 db.ActiveCommittedTxIdsIdx 变量，
+		// 等到 tx 提交时，再一次行将所有涉及到的 txid 索引落盘。
+		//
+		//
+		// 把关联的已提交事务索引 db.ActiveCommittedTxIdsIdx 暂存起来，然后清空&重置，
 		tx.ReservedStoreTxIDIdxes[fID] = tx.db.ActiveCommittedTxIdsIdx
-
 		// clear and reset ActiveCommittedTxIdsIdx
 		tx.db.ActiveCommittedTxIdsIdx = nil
 		tx.db.ActiveCommittedTxIdsIdx = NewTree()

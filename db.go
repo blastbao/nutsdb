@@ -126,25 +126,27 @@ type (
 	DB struct {
 		opt                     Options   // the database options
 
+		BPTreeIdx               BPTreeIdx 			// Hint Index
 
-		BPTreeIdx               BPTreeIdx // Hint Index
-
+		// 当数据文件滚动时，关联的 B+ 树索引落盘后，会将元数据保存到这里；
+		// 在查询磁盘 B+ 树时，会遍历本切片，逐个文件来查询
 		BPTreeRootIdxes         []*BPTreeRootIdx
 
+		BPTreeKeyEntryPosMap    map[string]int64 	// key = bucket+key  val = EntryPos
 
-		BPTreeKeyEntryPosMap    map[string]int64 // key = bucket+key  val = EntryPos
 		bucketMetas             BucketMetasIdx
 		SetIdx                  SetIdx
 		SortedSetIdx            SortedSetIdx
 		ListIdx                 ListIdx
 		ActiveFile              *DataFile
 
-		// 内存索引: 存储key=>record
+		// 存储当前数据文件关联的数据索引，是基于内存的
 		ActiveBPTreeIdx         *BPTree
-		// 内存索引: 存储已提交的事务ID
+		// 存储当前数据文件关联的已提交 txid 索引，是基于磁盘的
 		ActiveCommittedTxIdsIdx *BPTree
 
 		committedTxIds          map[uint64]struct{}
+
 		MaxFileID               int64
 		mu                      sync.RWMutex
 		KeyCount                int // total key number ,include expired, deleted, repeated.
@@ -294,9 +296,6 @@ func (db *DB) View(fn func(tx *Tx) error) error {
 
 	return db.managed(false, fn)
 }
-
-
-
 
 
 // Merge removes dirty data and reduce data redundancy,following these steps:
@@ -745,15 +744,12 @@ func (db *DB) buildHintIdx(dataFileIds []int) error {
 		return err
 	}
 
-
 	if len(unconfirmedRecords) == 0 {
 		return nil
 	}
 
-
 	// 遍历所有未确认的记录
 	for _, r := range unconfirmedRecords {
-
 
 		// 如果记录对应的 txID 已经提交
 		if _, ok := db.committedTxIds[r.H.meta.txID]; ok {
@@ -769,10 +765,12 @@ func (db *DB) buildHintIdx(dataFileIds []int) error {
 
 				// B+ 树磁盘索引
 				if db.opt.EntryIdxMode == HintBPTSparseIdxMode {
+
 					// 插入到 B+ 树中
 					if err = db.buildActiveBPTreeIdx(r); err != nil {
 						return err
 					}
+
 				// B+ 树内存索引
 				} else {
 					// 插入到 B+ 树中
